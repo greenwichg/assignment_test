@@ -1,11 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-RDF Store for Gilded Rose inventory management.
-
-This module converts Items to/from RDF representation and performs
-quality updates using RDF/SPARQL operations.
-"""
-
 import os
 
 from rdflib import Graph, Namespace, Literal, URIRef
@@ -15,19 +8,14 @@ GR = Namespace("http://example.org/gilded-rose#")
 
 
 class RDFItemStore:
-    """Manages items as RDF triples and provides methods for quality updates."""
 
     def __init__(self):
         self.graph = Graph()
         self.graph.bind("gr", GR)
-        self._load_schema()
-
-    def _load_schema(self):
         schema_path = os.path.join(os.path.dirname(__file__), "schema.ttl")
         self.graph.parse(schema_path, format="turtle")
 
-    def item_to_rdf(self, item, item_id: int) -> URIRef:
-        """Convert an Item object to RDF triples and add to the graph."""
+    def item_to_rdf(self, item, item_id):
         item_uri = URIRef(f"http://example.org/gilded-rose#item_{item_id}")
 
         self.graph.add((item_uri, RDF.type, GR.Item))
@@ -38,24 +26,18 @@ class RDFItemStore:
 
         return item_uri
 
-    def rdf_to_item(self, item_uri: URIRef, item):
-        """Sync RDF data back to the Item object."""
+    def rdf_to_item(self, item_uri, item):
+        """Write sellIn/quality back from the graph into the Item object."""
         sell_in = self.graph.value(item_uri, GR.sellIn)
         quality = self.graph.value(item_uri, GR.quality)
-
         if sell_in is not None:
             item.sell_in = int(sell_in)
         if quality is not None:
             item.quality = int(quality)
 
     def update_quality(self):
-        """
-        Apply the Gilded Rose business rules to every item in the graph.
-
-        Uses SPARQL to query items by type, then applies the appropriate
-        quality/sellIn adjustments in Python and writes them back.
-        """
-        items_query = """
+        """Query all items via SPARQL, apply rules, write back."""
+        query = """
             SELECT ?item ?type ?sellIn ?quality
             WHERE {
                 ?item a gr:Item ;
@@ -64,58 +46,50 @@ class RDFItemStore:
                       gr:quality ?quality .
             }
         """
-        results = list(self.graph.query(items_query, initNs={"gr": GR}))
+        rows = list(self.graph.query(query, initNs={"gr": GR}))
 
-        for row in results:
-            item_uri = row.item
-            item_type = row.type
+        for row in rows:
             sell_in = int(row.sellIn)
             quality = int(row.quality)
+            new_sell_in, new_quality = self._apply_rules(row.type, sell_in, quality)
 
-            new_sell_in, new_quality = self._apply_rules(item_type, sell_in, quality)
-
-            self._update_triple(item_uri, GR.sellIn, sell_in, new_sell_in)
-            self._update_triple(item_uri, GR.quality, quality, new_quality)
+            # swap old triple values for new ones
+            self._set_value(row.item, GR.sellIn, sell_in, new_sell_in)
+            self._set_value(row.item, GR.quality, quality, new_quality)
 
     def _apply_rules(self, item_type, sell_in, quality):
-        """Return (new_sell_in, new_quality) after applying the business rules."""
         if item_type == GR.Sulfuras:
             return sell_in, quality
 
-        new_sell_in = sell_in - 1
         expired = sell_in <= 0
+        new_sell_in = sell_in - 1
 
         if item_type == GR.AgedBrie:
-            delta = 2 if expired else 1
-            new_quality = min(quality + delta, 50)
+            change = 2 if expired else 1
+            return new_sell_in, min(quality + change, 50)
 
-        elif item_type == GR.BackstagePass:
+        if item_type == GR.BackstagePass:
             if expired:
-                new_quality = 0
-            elif sell_in <= 5:
-                new_quality = min(quality + 3, 50)
-            elif sell_in <= 10:
-                new_quality = min(quality + 2, 50)
-            else:
-                new_quality = min(quality + 1, 50)
+                return new_sell_in, 0
+            if sell_in <= 5:
+                return new_sell_in, min(quality + 3, 50)
+            if sell_in <= 10:
+                return new_sell_in, min(quality + 2, 50)
+            return new_sell_in, min(quality + 1, 50)
 
-        elif item_type == GR.ConjuredItem:
-            delta = 4 if expired else 2
-            new_quality = max(quality - delta, 0)
+        if item_type == GR.ConjuredItem:
+            change = 4 if expired else 2
+            return new_sell_in, max(quality - change, 0)
 
-        else:
-            delta = 2 if expired else 1
-            new_quality = max(quality - delta, 0)
+        # normal item
+        change = 2 if expired else 1
+        return new_sell_in, max(quality - change, 0)
 
-        return new_sell_in, new_quality
-
-    def _update_triple(self, subject, predicate, old_val, new_val):
-        """Replace a single integer-valued triple."""
+    def _set_value(self, subject, predicate, old_val, new_val):
         self.graph.remove((subject, predicate, Literal(old_val, datatype=XSD.integer)))
         self.graph.add((subject, predicate, Literal(new_val, datatype=XSD.integer)))
 
-    def _determine_item_type(self, name: str) -> URIRef:
-        """Map an item name to its RDF item-type URI."""
+    def _determine_item_type(self, name):
         if name == "Aged Brie":
             return GR.AgedBrie
         if name == "Sulfuras, Hand of Ragnaros":
@@ -125,7 +99,3 @@ class RDFItemStore:
         if name.startswith("Conjured"):
             return GR.ConjuredItem
         return GR.NormalItem
-
-    def serialize(self, fmt="turtle"):
-        """Return the current graph serialized in the given format."""
-        return self.graph.serialize(format=fmt)
