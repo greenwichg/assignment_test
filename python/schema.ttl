@@ -35,7 +35,7 @@ gr:itemType a rdf:Property ;
     rdfs:range gr:ItemType ;
     rdfs:label "item type" .
 
-# Item Types (examples - you may need to add more)
+# Item Types
 gr:NormalItem a gr:ItemType ;
     rdfs:label "Normal Item" ;
     rdfs:comment "Standard items that degrade in quality" .
@@ -52,4 +52,6 @@ gr:BackstagePass a gr:ItemType ;
     rdfs:label "Backstage Pass" ;
     rdfs:comment "Increases in quality as concert approaches, drops to 0 after" .
 
-# TODO: Add Conjured item type and any additional properties needed for business rules
+gr:ConjuredItem a gr:ItemType ;
+    rdfs:label "Conjured Item" ;
+    rdfs:comment "Degrades in quality twice as fast as normal items" .
